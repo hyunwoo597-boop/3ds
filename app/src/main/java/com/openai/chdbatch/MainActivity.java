@@ -270,7 +270,7 @@ public class MainActivity extends Activity {
                 if (primaryOut.exists() || (binOut != null && binOut.exists())) {
                     appendLog("[건너뜀] 결과 파일 존재: " + base);
                     skip++;
-                    setProgress(i + 1);
+                    updateProgress(i + 1);
                     continue;
                 }
 
@@ -296,7 +296,7 @@ public class MainActivity extends Activity {
                     if (binOut != null && binOut.exists() && binOut.length() == 0) binOut.delete();
                     fail++;
                 }
-                setProgress(i + 1);
+                updateProgress(i + 1);
             }
             final int fOk = ok, fSkip = skip, fFail = fail;
             runOnUiThread(() -> {
@@ -351,7 +351,7 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void setProgress(int value) {
+    private void updateProgress(int value) {
         runOnUiThread(() -> progressBar.setProgress(value));
     }
 
