@@ -1,0 +1,18 @@
+Third-party component: CHDMan (MAME), GPL-2.0-or-later.
+
+The Android ARM64 CHDMan executable used by this project is fetched from:
+https://github.com/ItsRetroPup/Mimir
+Pinned Mimir commit:
+db402456cd7c7418da41ff0ef8dabacc6a9e77f2
+File:
+app/src/main/jniLibs/arm64-v8a/libchdman.so
+Expected Git blob SHA-1:
+c45280d4721a7440ec3c3b520a369b316043069e
+
+The provider documents that this binary is built from official MAME source revision:
+ecf0add29f06ba131994dca5b88c3a0edf6c2ad8
+
+MAME source repository:
+https://github.com/mamedev/mame
+
+If you redistribute an APK containing CHDMan, comply with the applicable GPL source-distribution obligations.
