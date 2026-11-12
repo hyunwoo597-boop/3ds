@@ -54,14 +54,18 @@ jobs:
 
           # Project_CTR publishes one release per tool, so search all of them.
           ctr=$(api "https://api.github.com/repos/3DSGuy/Project_CTR/releases?per_page=50")
-          mk_url=$(echo "$ctr" | jq -r '[.[].assets[].browser_download_url | select(test("makerom.*(ubuntu|linux).*(x86_64|x64|amd64)"; "i"))][0] // empty')
+          # Skip drafts; try each matching asset until one downloads.
+          mk_url=""
+          for u in $(echo "$ctr" | jq -r '.[] | select(.draft == false) | .assets[].browser_download_url | select(test("makerom.*(ubuntu|linux).*(x86_64|x64|amd64)"; "i"))'); do
+            echo "try makerom: $u"
+            if curl -fsSL -o makerom.zip "$u"; then mk_url="$u"; break; fi
+          done
           if [ -z "$mk_url" ]; then
-            echo "::error::makerom Linux x86_64 빌드를 찾지 못했습니다. 릴리스 파일 목록:"
-            echo "$ctr" | jq -r '.[].assets[].name'
+            echo "::error::makerom Linux x86_64 빌드를 받지 못했습니다. 릴리스 파일 목록:"
+            echo "$ctr" | jq -r '.[] | "\(.tag_name) draft=\(.draft) pre=\(.prerelease): \([.assets[].name] | join(", "))"'
             exit 1
           fi
           echo "makerom: $mk_url"
-          curl -fsSL -o makerom.zip "$mk_url"
           unzip -o -q makerom.zip -d makerom
           makerom_bin=$(find "$PWD/makerom" -type f -name 'makerom*' ! -name '*.zip' | head -n 1)
           [ -n "$makerom_bin" ] || { echo "::error::makerom 실행 파일이 zip 안에 없습니다"; find makerom; exit 1; }
