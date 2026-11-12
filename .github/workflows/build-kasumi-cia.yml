@@ -1,0 +1,92 @@
+# Kasumi 1.1.2 한국어판 CIA 빌드 (GitHub Actions)
+#
+# 사용법: 저장소 루트에 Kasumi_1.1.2_Korean_Source.zip 을 올리면 자동 빌드되고,
+# Actions 탭 -> "Build Kasumi KO CIA" -> Run workflow 로 수동 실행도 됩니다.
+# 완료되면 Releases(또는 해당 실행의 Artifacts)에서 Kasumi.cia 를 받습니다.
+
+name: Build Kasumi KO CIA
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Kasumi*.zip'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitarm:latest
+    env:
+      DEVKITPRO: /opt/devkitpro
+      DEVKITARM: /opt/devkitpro/devkitARM
+      # devkitpro/devkitarm 이미지에 들어 있는 도구 (pop2-3ds-cia 빌드와 동일)
+      MAKEROM: /opt/devkitpro/tools/bin/makerom
+      BANNERTOOL: /opt/devkitpro/tools/bin/bannertool
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          set -eu
+          apt-get update
+          apt-get install -y --no-install-recommends cmake make python3 unzip ca-certificates
+          dkp-pacman -Syu --noconfirm --needed 3ds-dev 3ds-curl 3ds-jansson 3ds-mbedtls 3ds-libopus 3ds-zlib
+          ls -l "$MAKEROM" "$BANNERTOOL" /opt/devkitpro/tools/bin/tex3ds /opt/devkitpro/tools/bin/picasso
+
+      - name: Extract Korean source zip
+        run: |
+          set -eu
+          zip=$(ls Kasumi*.zip 2>/dev/null | head -n 1 || true)
+          [ -n "$zip" ] || { echo "::error::저장소 루트에 Kasumi 소스 zip이 없습니다"; exit 1; }
+          mkdir -p work
+          unzip -q "$zip" -d work
+          makefile=$(find work -maxdepth 2 -name Makefile | head -n 1)
+          [ -n "$makefile" ] || { echo "::error::zip 안에서 Makefile을 찾지 못했습니다"; exit 1; }
+          echo "SRC=$(cd "$(dirname "$makefile")" && pwd)" >> "$GITHUB_ENV"
+
+      - name: Adapt Windows paths for Linux
+        run: |
+          set -eu
+          cd "$SRC"
+          # The transport scripts were written for devkitPro MSYS on Windows.
+          sed -i 's#/c/devkitPro#/opt/devkitpro#g; s#C:/devkitPro#/opt/devkitpro#g; s#\.exe\b##g' \
+            tools/build-transport.sh tools/transport-toolchain.cmake
+          # A newer devkitARM GCC can add warnings the author's version did not
+          # have; do not let those stop the build.
+          sed -i 's/ -Werror//' Makefile
+          grep -n 'devkitpro\|devkitPro' tools/build-transport.sh tools/transport-toolchain.cmake
+
+      - name: Build WebRTC transport and echo canceller
+        run: |
+          set -eu
+          cd "$SRC"
+          bash tools/build-transport.sh
+          bash tools/build-aecm.sh
+
+      - name: Build 3DSX and CIA
+        run: |
+          set -eu
+          cd "$SRC"
+          make -j4
+          make cia MAKEROM="$MAKEROM" BANNERTOOL="$BANNERTOOL"
+          ls -l Kasumi.cia Kasumi.3dsx
+          sha256sum Kasumi.cia Kasumi.3dsx
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kasumi-KO
+          if-no-files-found: error
+          path: |
+            ${{ env.SRC }}/Kasumi.cia
+            ${{ env.SRC }}/Kasumi.3dsx
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: kasumi-ko-build-${{ github.run_number }}
+          name: Kasumi 1.1.2 한국어 (build ${{ github.run_number }})
+          files: |
+            ${{ env.SRC }}/Kasumi.cia
+            ${{ env.SRC }}/Kasumi.3dsx
