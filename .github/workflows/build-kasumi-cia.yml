@@ -11,6 +11,7 @@ on:
   push:
     paths:
       - 'Kasumi*.zip'
+      - '.github/workflows/build-kasumi-cia.yml'
 
 permissions:
   contents: write
@@ -22,9 +23,6 @@ jobs:
     env:
       DEVKITPRO: /opt/devkitpro
       DEVKITARM: /opt/devkitpro/devkitARM
-      # devkitpro/devkitarm 이미지에 들어 있는 도구 (pop2-3ds-cia 빌드와 동일)
-      MAKEROM: /opt/devkitpro/tools/bin/makerom
-      BANNERTOOL: /opt/devkitpro/tools/bin/bannertool
     steps:
       - uses: actions/checkout@v4
 
@@ -32,9 +30,53 @@ jobs:
         run: |
           set -eu
           apt-get update
-          apt-get install -y --no-install-recommends cmake make python3 unzip ca-certificates
+          apt-get install -y --no-install-recommends cmake make python3 unzip curl jq ca-certificates
           dkp-pacman -Syu --noconfirm --needed 3ds-dev 3ds-curl 3ds-jansson 3ds-mbedtls 3ds-libopus 3ds-zlib
-          ls -l "$MAKEROM" "$BANNERTOOL" /opt/devkitpro/tools/bin/tex3ds /opt/devkitpro/tools/bin/picasso
+          ls -l /opt/devkitpro/tools/bin/tex3ds /opt/devkitpro/tools/bin/picasso
+          arm-none-eabi-gcc --version | head -n 1
+
+      # makerom / bannertool are not part of the devkitarm image.
+      - name: Fetch makerom and bannertool
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/tools"
+          cd "$HOME/tools"
+          api() { curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$1"; }
+
+          # Project_CTR publishes one release per tool, so search all of them.
+          ctr=$(api "https://api.github.com/repos/3DSGuy/Project_CTR/releases?per_page=50")
+          mk_url=$(echo "$ctr" | jq -r '[.[].assets[].browser_download_url | select(test("makerom.*(ubuntu|linux).*(x86_64|x64|amd64)"; "i"))][0] // empty')
+          if [ -z "$mk_url" ]; then
+            echo "::error::makerom Linux x86_64 빌드를 찾지 못했습니다. 릴리스 파일 목록:"
+            echo "$ctr" | jq -r '.[].assets[].name'
+            exit 1
+          fi
+          echo "makerom: $mk_url"
+          curl -fsSL -o makerom.zip "$mk_url"
+          unzip -o -q makerom.zip -d makerom
+          makerom_bin=$(find "$PWD/makerom" -type f -name 'makerom*' ! -name '*.zip' | head -n 1)
+          [ -n "$makerom_bin" ] || { echo "::error::makerom 실행 파일이 zip 안에 없습니다"; find makerom; exit 1; }
+          chmod +x "$makerom_bin"
+
+          bt=$(api "https://api.github.com/repos/Steveice10/bannertool/releases/latest")
+          bt_url=$(echo "$bt" | jq -r '[.assets[].browser_download_url | select(test("bannertool.*\\.zip$"; "i"))][0] // empty')
+          if [ -z "$bt_url" ]; then
+            echo "::error::bannertool 릴리스를 찾지 못했습니다. 릴리스 파일 목록:"
+            echo "$bt" | jq -r '.assets[].name'
+            exit 1
+          fi
+          echo "bannertool: $bt_url"
+          curl -fsSL -o bannertool.zip "$bt_url"
+          unzip -o -q bannertool.zip -d bannertool
+          bannertool_bin=$(find "$PWD/bannertool" -type f -path '*linux-x86_64*' -name 'bannertool' | head -n 1)
+          [ -n "$bannertool_bin" ] || { echo "::error::bannertool linux-x86_64 실행 파일이 zip 안에 없습니다"; find bannertool; exit 1; }
+          chmod +x "$bannertool_bin"
+
+          echo "MAKEROM=$makerom_bin" >> "$GITHUB_ENV"
+          echo "BANNERTOOL=$bannertool_bin" >> "$GITHUB_ENV"
+          "$makerom_bin" -version 2>&1 | head -n 3 || true
 
       - name: Extract Korean source zip
         run: |
