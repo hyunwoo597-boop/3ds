@@ -34,7 +34,7 @@ jobs:
         run: |
           set -eu
           apt-get update
-          apt-get install -y --no-install-recommends cmake make python3 unzip curl jq ca-certificates
+          apt-get install -y --no-install-recommends cmake make g++ git python3 unzip ca-certificates
           dkp-pacman -Syu --noconfirm --needed 3ds-dev 3ds-curl 3ds-jansson 3ds-mbedtls 3ds-libopus 3ds-zlib
           ls -l /opt/devkitpro/tools/bin/tex3ds /opt/devkitpro/tools/bin/picasso
           # Container steps are not login shells, so add the devkitPro tools to PATH.
@@ -42,62 +42,51 @@ jobs:
           echo "/opt/devkitpro/tools/bin" >> "$GITHUB_PATH"
           /opt/devkitpro/devkitARM/bin/arm-none-eabi-gcc --version | head -n 1
 
-      # makerom / bannertool are not part of the devkitarm image.
-      - name: Fetch makerom and bannertool
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # makerom / bannertool are not part of the devkitarm image, and the
+      # original bannertool repository is gone, so build both from pinned sources.
+      - name: Build makerom and bannertool from source
         run: |
           set -euo pipefail
           mkdir -p "$HOME/tools"
           cd "$HOME/tools"
-          api() { curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$1"; }
+          fetch_commit() {
+            mkdir "$1"
+            git -C "$1" init -q
+            git -C "$1" remote add origin "$2"
+            git -C "$1" fetch -q --depth 1 origin "$3"
+            git -C "$1" checkout -q FETCH_HEAD
+          }
 
-          # Project_CTR publishes one release per tool, so search all of them.
-          ctr=$(api "https://api.github.com/repos/3DSGuy/Project_CTR/releases?per_page=50")
-          # Skip drafts; try each matching asset until one downloads.
-          mk_url=""
-          for u in $(echo "$ctr" | jq -r '.[] | select(.draft == false) | .assets[].browser_download_url | select(test("makerom.*(ubuntu|linux).*(x86_64|x64|amd64)"; "i"))'); do
-            echo "try makerom: $u"
-            if curl -fsSL -o makerom.zip "$u"; then mk_url="$u"; break; fi
+          # makerom (Project_CTR)
+          fetch_commit ctr https://github.com/3DSGuy/Project_CTR d52c2b0e788c2d085763d7c5dcc4b2edd9ffb7d8
+          make -C ctr/makerom deps -j4
+          make -C ctr/makerom -j4
+          test -x ctr/makerom/bin/makerom
+
+          # bannertool (carstene1ns fork of Steveice10's tool). Its CMake file
+          # wants 3.28, so compile it directly; flags mirror its CMakeLists.txt.
+          fetch_commit bt https://github.com/carstene1ns/3ds-bannertool 734d33be79fd3f8c29c6296158f06ac7c5ca9dcb
+          cd bt
+          mkdir -p out
+          for lib in stb_image stb_vorbis dr_wav; do
+            g++ -std=c++17 -O2 -Isource/pc -c "source/pc/$lib.cpp" -o "out/$lib.o"
           done
-          if [ -z "$mk_url" ]; then
-            echo "::error::makerom Linux x86_64 빌드를 받지 못했습니다. 릴리스 파일 목록:"
-            echo "$ctr" | jq -r '.[] | "\(.tag_name) draft=\(.draft) pre=\(.prerelease): \([.assets[].name] | join(", "))"'
-            exit 1
-          fi
-          echo "makerom: $mk_url"
-          unzip -o -q makerom.zip -d makerom
-          makerom_bin=$(find "$PWD/makerom" -type f -name 'makerom*' ! -name '*.zip' | head -n 1)
-          [ -n "$makerom_bin" ] || { echo "::error::makerom 실행 파일이 zip 안에 없습니다"; find makerom; exit 1; }
-          chmod +x "$makerom_bin"
+          app_flags="-std=c++17 -O2 -Isource -Isource/pc -DVERSION=\"1.2.3\" -DSTBI_ONLY_PNG -DSTBI_NO_LINEAR -DSTBI_NO_STDIO -DSTB_VORBIS_NO_PUSHDATA_API -DSTB_VORBIS_NO_STDIO -DDR_WAV_NO_STDIO"
+          for src in main log types utils 3ds/cbmd 3ds/cwav 3ds/lz11; do
+            g++ $app_flags -c "source/$src.cpp" -o "out/$(basename "$src").o"
+          done
+          g++ out/*.o -o out/bannertool
+          test -x out/bannertool
 
-          bt_url=""
-          bt=$(api "https://api.github.com/repos/Steveice10/bannertool/releases?per_page=30" || true)
-          if [ -n "$bt" ]; then
-            for u in $(echo "$bt" | jq -r '.[] | select(.draft == false) | .assets[].browser_download_url | select(test("bannertool.*\\.zip$"; "i"))'); do
-              echo "try bannertool: $u"
-              if curl -fsSL -o bannertool.zip "$u"; then bt_url="$u"; break; fi
-            done
-          fi
-          if [ -z "$bt_url" ]; then
-            echo "::error::bannertool 릴리스를 받지 못했습니다. devkitPro 패키지 검색 결과:"
-            dkp-pacman -Ss bannertool || true
-            dkp-pacman -Ss makerom || true
-            exit 1
-          fi
-          echo "bannertool: $bt_url"
-          unzip -o -q bannertool.zip -d bannertool
-          bannertool_bin=$(find "$PWD/bannertool" -type f -path '*linux-x86_64*' -name 'bannertool' | head -n 1)
-          [ -n "$bannertool_bin" ] || { echo "::error::bannertool linux-x86_64 실행 파일이 zip 안에 없습니다"; find bannertool; exit 1; }
-          chmod +x "$bannertool_bin"
-
-          echo "MAKEROM=$makerom_bin" >> "$GITHUB_ENV"
-          echo "BANNERTOOL=$bannertool_bin" >> "$GITHUB_ENV"
-          "$makerom_bin" -version 2>&1 | head -n 3 || true
+          echo "MAKEROM=$HOME/tools/ctr/makerom/bin/makerom" >> "$GITHUB_ENV"
+          echo "BANNERTOOL=$HOME/tools/bt/out/bannertool" >> "$GITHUB_ENV"
+          # Printing the usage text makes bannertool exit non-zero; that is fine.
+          out/bannertool 2>&1 | head -n 3 || true
 
       - name: Extract Korean source zip
         run: |
           set -eu
+          cd "$GITHUB_WORKSPACE"
           zip=$(ls Kasumi*.zip 2>/dev/null | head -n 1 || true)
           [ -n "$zip" ] || { echo "::error::저장소 루트에 Kasumi 소스 zip이 없습니다"; exit 1; }
           mkdir -p work
