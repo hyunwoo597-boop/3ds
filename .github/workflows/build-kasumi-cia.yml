@@ -71,15 +71,21 @@ jobs:
           [ -n "$makerom_bin" ] || { echo "::error::makerom 실행 파일이 zip 안에 없습니다"; find makerom; exit 1; }
           chmod +x "$makerom_bin"
 
-          bt=$(api "https://api.github.com/repos/Steveice10/bannertool/releases/latest")
-          bt_url=$(echo "$bt" | jq -r '[.assets[].browser_download_url | select(test("bannertool.*\\.zip$"; "i"))][0] // empty')
+          bt_url=""
+          bt=$(api "https://api.github.com/repos/Steveice10/bannertool/releases?per_page=30" || true)
+          if [ -n "$bt" ]; then
+            for u in $(echo "$bt" | jq -r '.[] | select(.draft == false) | .assets[].browser_download_url | select(test("bannertool.*\\.zip$"; "i"))'); do
+              echo "try bannertool: $u"
+              if curl -fsSL -o bannertool.zip "$u"; then bt_url="$u"; break; fi
+            done
+          fi
           if [ -z "$bt_url" ]; then
-            echo "::error::bannertool 릴리스를 찾지 못했습니다. 릴리스 파일 목록:"
-            echo "$bt" | jq -r '.assets[].name'
+            echo "::error::bannertool 릴리스를 받지 못했습니다. devkitPro 패키지 검색 결과:"
+            dkp-pacman -Ss bannertool || true
+            dkp-pacman -Ss makerom || true
             exit 1
           fi
           echo "bannertool: $bt_url"
-          curl -fsSL -o bannertool.zip "$bt_url"
           unzip -o -q bannertool.zip -d bannertool
           bannertool_bin=$(find "$PWD/bannertool" -type f -path '*linux-x86_64*' -name 'bannertool' | head -n 1)
           [ -n "$bannertool_bin" ] || { echo "::error::bannertool linux-x86_64 실행 파일이 zip 안에 없습니다"; find bannertool; exit 1; }
