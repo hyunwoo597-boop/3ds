@@ -35,21 +35,26 @@ jobs:
           set -eu
           apt-get update
           apt-get install -y --no-install-recommends cmake make g++ git python3 unzip ca-certificates
-          # pkg.devkitpro.org sometimes answers 403 to CI runners: retry, then fall
-          # back to the packages already installed in the image.
-          ok=""
-          for attempt in 1 2 3 4; do
-            if dkp-pacman -Syu --noconfirm --needed 3ds-dev 3ds-curl 3ds-jansson 3ds-mbedtls 3ds-libopus 3ds-zlib; then
-              ok=1
-              break
-            fi
-            echo "dkp-pacman attempt $attempt failed; retrying in 30s"
-            sleep 30
-          done
-          if [ -z "$ok" ]; then
-            echo "::warning::devkitPro 패키지 서버에 접속하지 못해 이미지에 설치된 패키지로 진행합니다"
-            dkp-pacman -Q libctru citro2d citro3d 3ds-curl 3ds-jansson 3ds-mbedtls 3ds-libopus 3ds-zlib
+          # Use the libraries already in the image. Do NOT upgrade: libctru 2.7.1
+          # renamed InfoLedPattern to MCU_InfoLedPattern, which Kasumi's
+          # source/3ds/system.c (written for the older libctru) does not know.
+          P=/opt/devkitpro
+          need="$P/libctru/include/3ds.h $P/libctru/include/citro2d.h $P/libctru/include/citro3d.h \
+            $P/portlibs/3ds/lib/libcurl.a $P/portlibs/3ds/lib/libjansson.a $P/portlibs/3ds/lib/libopus.a \
+            $P/portlibs/3ds/lib/libmbedtls.a $P/portlibs/3ds/lib/libz.a"
+          missing=""
+          for f in $need; do [ -e "$f" ] || missing="$missing $f"; done
+          if [ -n "$missing" ]; then
+            echo "::warning::이미지에 없는 파일:$missing -> devkitPro 패키지를 설치합니다"
+            ok=""
+            for attempt in 1 2 3 4; do
+              if dkp-pacman -Sy --noconfirm --needed 3ds-dev 3ds-curl 3ds-jansson 3ds-mbedtls 3ds-libopus 3ds-zlib; then ok=1; break; fi
+              echo "dkp-pacman attempt $attempt failed; retrying in 30s"; sleep 30
+            done
+            [ -n "$ok" ] || { echo "::error::devkitPro 패키지를 설치하지 못했습니다"; exit 1; }
           fi
+          dkp-pacman -Q libctru || true
+          grep -rn "InfoLedPattern" "$P/libctru/include/3ds/services/mcuhwc.h" | head -n 5 || true
           ls -l /opt/devkitpro/tools/bin/tex3ds /opt/devkitpro/tools/bin/picasso
           # Container steps are not login shells, so add the devkitPro tools to PATH.
           echo "/opt/devkitpro/devkitARM/bin" >> "$GITHUB_PATH"
@@ -119,6 +124,9 @@ jobs:
           # A newer devkitARM GCC can add warnings the author's version did not
           # have; do not let those stop the build.
           sed -i 's/ -Werror//' Makefile
+          # korean_font.c has "gfx/*.png" inside a comment: "/*" within a comment
+          # is a warning (an error under the original -Werror).
+          sed -i 's#gfx/\*\.png#gfx/NAME.png#' source/3ds/korean_font.c
           grep -n 'devkitpro\|devkitPro' tools/build-transport.sh tools/transport-toolchain.cmake
 
       - name: Build WebRTC transport and echo canceller
