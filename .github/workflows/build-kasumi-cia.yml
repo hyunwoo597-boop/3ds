@@ -12,6 +12,7 @@ on:
     paths:
       - 'Kasumi*.zip'
       - '.github/workflows/build-kasumi-cia.yml'
+      - 'overlay/**'
 
 permissions:
   contents: write
@@ -113,6 +114,17 @@ jobs:
           makefile=$(find work -maxdepth 2 -name Makefile | head -n 1)
           [ -n "$makefile" ] || { echo "::error::zip 안에서 Makefile을 찾지 못했습니다"; exit 1; }
           echo "SRC=$(cd "$(dirname "$makefile")" && pwd)" >> "$GITHUB_ENV"
+
+      # Files in overlay/ (same paths as in the source zip) replace the zip's own,
+      # so a fix only needs the changed files, not a new 18 MB zip.
+      - name: Apply overlay files
+        run: |
+          set -eu
+          if [ -d "$GITHUB_WORKSPACE/overlay" ]; then
+            cp -rv "$GITHUB_WORKSPACE/overlay/." "$SRC/"
+            cd "$SRC"
+            python3 tools/i18n_gen.py | tail -n 3
+          fi
 
       - name: Adapt Windows paths for Linux
         run: |
